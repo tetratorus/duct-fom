@@ -70,7 +70,7 @@ def land(lake, source_version: str, legacy: gpd.GeoDataFrame | None = None, id_c
     except FileNotFoundError:
         existing = pd.DataFrame(columns=COLUMNS)
     kept = existing[~existing["source"].isin(new["source"].unique())]
-    merged = pd.concat([kept, new], ignore_index=True)
+    merged = pd.concat([kept, new], ignore_index=True) if len(kept) else new
     lake.silver_write("id_bridge", merged)
     return merged
 
