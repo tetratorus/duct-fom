@@ -18,6 +18,9 @@ from rasterio.transform import from_bounds
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from duct_common import bbox_wgs84, read_climate_hdf5
 
+# HDF5 row 0 = south: ucm-wrf/proc_sim/processor.py stores c_data in WRF south_north order and only flips it for the
+# GeoTIFF (export_as_tiff(..., flip_vertically=True)); DUCT Explorer flips the HDF5 back (dots/duct_nsc_variables.py).
+ROW0 = "south"
 UHI_OUTSIDE_URBAN = 999  # ucm-wrf/proc_sim/processor.py writes 999 outside the urban mask for 2m_air_temperature_uhi
 
 
@@ -41,7 +44,7 @@ def prepare(inputs: dict, params: dict, wd: Path) -> None:
 
 
 def collect(wd: Path) -> dict:
-    return read_climate_hdf5(Path(wd) / "d04-near-surface-climate", "wrf_d04",
+    return read_climate_hdf5(Path(wd) / "d04-near-surface-climate", "wrf_d04", ROW0,
                              sentinels={"2m_air_temperature_uhi": UHI_OUTSIDE_URBAN})
 
 

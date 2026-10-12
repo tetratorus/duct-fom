@@ -33,22 +33,35 @@ def building_props(row) -> dict:
     return {"id": row["building_id"], "name": row["building_id"], "height": float(row["height_m"])}
 
 
-def grid_cells(bounding_box: list, ny: int, nx: int) -> gpd.GeoDataFrame:
-    """Cells of a north-up regular lat/lon grid. DUCT HDF5 bounding_box attr is [south, north, west, east]."""
+ROW0 = ("south", "north")
+
+
+def grid_cells(bounding_box: list, ny: int, nx: int, row0: str) -> gpd.GeoDataFrame:
+    """Cells of a regular lat/lon grid. DUCT HDF5 bounding_box attr is [south, north, west, east].
+
+    row0 says which edge array row 0 lies on. DUCT's HDF5 writers keep the model's own order, which is
+    south-up (row 0 = southernmost) for WRF, PALM and Scout; GeoTIFFs are north-up. cell_id/row/col keep the
+    upstream array indices, so Gold rows map 1:1 to the HDF5.
+    """
+    if row0 not in ROW0:
+        raise ValueError(f"row0 must be one of {ROW0}, got {row0!r}")
     s, n, w, e = (float(v) for v in bounding_box)
     dx, dy = (e - w) / nx, (n - s) / ny
     rows, cols = np.indices((ny, nx))
     rows, cols = rows.ravel(), cols.ravel()
-    geoms = [box(w + c * dx, n - (r + 1) * dy, w + (c + 1) * dx, n - r * dy) for r, c in zip(rows, cols)]
+    south_edge = s + rows * dy if row0 == "south" else n - (rows + 1) * dy
+    geoms = [box(w + c * dx, y0, w + (c + 1) * dx, y0 + dy) for c, y0 in zip(cols, south_edge)]
     return gpd.GeoDataFrame({"cell_id": [f"r{r:04d}c{c:04d}" for r, c in zip(rows, cols)],
                              "row": rows.astype("int64"), "col": cols.astype("int64")},
                             geometry=geoms, crs="EPSG:4326").to_crs("EPSG:3414")
 
 
-def read_climate_hdf5(path: Path, prefix: str, sentinels: dict | None = None) -> dict:
+def read_climate_hdf5(path: Path, prefix: str, row0: str, sentinels: dict | None = None) -> dict:
     """DUCT.ClimateVariables / DUCT.NearSurfaceClimateVariables HDF5 -> {<prefix>_grid, <prefix>_values}.
 
     Each dataset is (t, y, x) or (t, z, y, x) with attrs unit, timestamps, bounding_box[, heights].
+    row0: edge of the bounding box that y index 0 lies on ("south" for every DUCT writer, see grid_cells).
+    height_m is the dataset's heights attr, or null for 2D fields (upstream gives none).
     Values equal to a dataset's sentinel (e.g. WRF's 999 outside the urban mask) and non-finite values are dropped.
     """
     sentinels = sentinels or {}
@@ -65,7 +78,7 @@ def read_climate_hdf5(path: Path, prefix: str, sentinels: dict | None = None) ->
                 raise ValueError(f"{name}: unexpected shape {data.shape}")
             nt, nz, ny, nx = data.shape
             if grid is None:
-                grid = grid_cells(list(ds.attrs["bounding_box"]), ny, nx)
+                grid = grid_cells(list(ds.attrs["bounding_box"]), ny, nx, row0)
                 grid_shape = (ny, nx)
             elif (ny, nx) != grid_shape:
                 raise ValueError(f"{name}: grid {ny}x{nx} differs from {grid_shape}")

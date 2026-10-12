@@ -1,7 +1,8 @@
 # rewire/ — DUCT Federation of Models on the sg-urban-spine
 
 Rewire, don't rewrite. DUCT's SaaS processors stay exactly as they are; this directory adds spine descriptors
-(`transform.yaml`, validated against [tetratorus/sg-urban-spine](https://github.com/tetratorus/sg-urban-spine)
+(`transform.yaml`, validated against the sg-urban-spine
+([tetratorus/saas-middleware@sg-urban-spine](https://github.com/tetratorus/saas-middleware/tree/sg-urban-spine))
 `spec/transform.schema.json`) and thin adapters that move data between the spine's Silver/Gold GeoParquet
 (EPSG:3414) and the files each DUCT processor reads/writes. **No upstream file was modified.**
 
@@ -11,7 +12,7 @@ Rewire, don't rewrite. DUCT's SaaS processors stay exactly as they are; this dir
 | `ucm-wrf/proc_prep` + `proc_sim` | `duct.wrf_mesoscale` | external (PBS/HPC) | 4 | n/a |
 | `ucm-palm/proc_prep` + `proc_sim` | `duct.palm_microscale` | external (NSCC HPC) | 4 | n/a |
 | `ucm-scout/proc` | `duct.scout_microscale` | external (NSCC ASPIRE2 + OpenFOAM) | 3 | n/a |
-| `bem-cea/proc_gen`, `proc_bee` | pointer to `cea.building_demand` ([bem-cea/](bem-cea/README.md)) | — | — | owned by tetratorus/CityEnergyAnalyst |
+| `bem-cea/proc_gen`, `proc_bee` | pointer to `cea.building_demand` + `cea.solar_potential` ([bem-cea/](bem-cea/README.md)) | — | — | owned by tetratorus/CityEnergyAnalyst |
 | `ucm-mva/proc_uvp` (hotspots) | not wired yet | — | — | — |
 
 ## Run
@@ -20,7 +21,7 @@ Python 3.10 (DUCT requirement).
 
 ```bash
 python3.10 -m venv venv && . venv/bin/activate
-pip install 'git+https://github.com/tetratorus/sg-urban-spine@main' \
+pip install 'git+https://github.com/tetratorus/saas-middleware@sg-urban-spine' \
   'numpy==1.23.5' 'pandas<2.3' 'pyarrow<18' 'geopandas==0.14.4' h5py pytest \
   -r ucm-mva/requirements.txt   # includes saas @ cooling-singapore/saas-middleware@8654f38 (0.6.11)
 spine --path rewire validate
@@ -54,11 +55,20 @@ document the contract:
 2. run the DUCT processor through SaaS Middleware RTI (native adapter, config `nscc`); see
    tetratorus/saas-middleware `rewire/README.md`.
 3. `adapter.collect(wd)` — the processor's HDF5 (`d04-near-surface-climate` / `climatic-variables`) ->
-   Gold `<model>_grid` + `<model>_values` (long format: cell, variable, unit, timestamp, level, value).
+   Gold `<model>_grid` + `<model>_values` (long format: cell, variable, unit, timestamp, level, height_m, value;
+   `height_m` is null for 2D fields).
 
 `tests/test_external_adapters.py` exercises prepare/collect on HDF5 files written in the same layout as the upstream
 writers and checks them with spine's `check_gold`; the models themselves were not run. Gaps are listed per
 descriptor under `readiness.gaps`.
+
+Grid orientation: DUCT writes these HDF5 arrays **south-up** (row 0 = southern edge) and flips only its GeoTIFFs
+(WRF `proc_sim/processor.py` L850 `flip_vertically=True`; Scout `proc/processor.py` builds on
+`np.linspace(lat_min, lat_max)` and flips back at L582; PALM keeps PALM's south->north `y`). Each adapter passes
+`ROW0 = "south"` to `duct_common.read_climate_hdf5`; `cell_id` `r<row>c<col>` keeps the HDF5 indices.
+`tests/test_grid_orientation.py` writes a north/south-asymmetric field, renders it with each upstream's own GeoTIFF
+function (extracted verbatim from the upstream source with `ast`, not imported or edited) and checks every Gold cell
+polygon samples its own value in that GeoTIFF; with `ROW0 = "north"` all three tests fail.
 
 ## IDs (`id_bridge.py`)
 
@@ -67,6 +77,19 @@ No new keys: adapters pass the spine `building_id` as DUCT's feature `id`/`name`
 `spatial_rows()` maps legacy DUCT GeoJSON ids onto Silver buildings by best IoU (`match_method: spatial_overlap`,
 `confidence` = IoU).
 
+Landing them in the lake (run after Silver `buildings` is materialised, before/independent of `spine run`):
+
+```bash
+python rewire/id_bridge.py --lake lake --source-version <buildings version> \
+  [--legacy old_duct_buildings.geojson --id-col id --legacy-source duct_bdp] [--scenario <name>]
+```
+
+`Lake.silver_write` replaces the whole table, so `land()` reads Silver `id_bridge`, drops only the rows of the
+sources it writes (`duct_fom`, `duct_bem_cea`, and the legacy source if given; re-runs are idempotent and stale ids
+go away), keeps every other source's rows, and writes the merged table. With `--scenario` the rows go to the
+scenario overlay via `Lake.scenario_set` instead. `tests/test_id_bridge_land.py` covers preservation, idempotence,
+the legacy spatial match and the CLI.
+
 ## Upstream changes
 
 None.
@@ -74,6 +97,10 @@ None.
 ## Not runnable / not done
 
 - WRF, PALM, Scout: no HPC here (see above); no gold-import command in the spine yet for external results.
+- Nullable Gold columns: `district_id` (MVA, null outside the land mask) and `height_m` (null for 2D fields) are
+  declared `nullable: true`, but sg-urban-spine `check_gold` currently treats every declared column as required, so
+  `spine run duct.mva_wind_corridor` fails its WAP audit until the spine honours `nullable` (one-line change to
+  `spine/validate.py::check_gold`). `spine test` compares against the frozen golden and is unaffected.
 - Upstream `ucm-mva/tests/test_mva.py::test_proc_uvp` / `test_proc_uwc` need `TEST_DATA_PATH` fixtures that are not
   in the repo; only `test_proc_uwc_graph` runs (passes on Python 3.10 with `TEST_DATA_PATH` set to any dir).
 - `ucm-mva/proc_uvp` (urban ventilation hotspots) and `bem-cea/proc_dcn` (district cooling) are not wired.

@@ -11,7 +11,7 @@ import pytest
 import rasterio
 from shapely.geometry import box
 from spine.transform import NotRunnable, invoke, load_descriptor
-from spine.validate import check_gold
+from spine.validate import ExpectationError, check_columns, check_gold
 
 REWIRE = Path(__file__).resolve().parents[1]
 CASE = REWIRE / "duct.mva_wind_corridor" / "golden" / "tanjong_pagar" / "inputs"
@@ -43,8 +43,19 @@ def _write_h5(path, datasets):
 
 
 def _check(desc, out):
+    """spine check_gold with `nullable: true` honoured (sg-urban-spine 5da419f marks every gold column required)."""
     for spec in desc.data["outputs"]:
-        check_gold(spec["name"], out[spec["name"]], spec)
+        cols = {c["name"]: {"type": c["type"], "required": not c.get("nullable", False)} for c in spec["columns"]}
+        check_columns(out[spec["name"]], cols, spec.get("key", []), f"gold.{spec['name']}")
+
+
+@pytest.mark.xfail(strict=True, raises=ExpectationError,
+                   reason="sg-urban-spine check_gold ignores `nullable`; height_m is null for 2D fields")
+def test_spine_check_gold_accepts_nullable_height(tmp_path):
+    mod, desc = _adapter("duct.scout_microscale")
+    _write_h5(tmp_path / "climatic-variables", {"air_temperature": (np.full((1, 2, 2), 31.0), "˚C", {})})
+    out = mod.collect(tmp_path)
+    check_gold("scout_values", out["scout_values"], desc.data["outputs"][1])
 
 
 @pytest.mark.parametrize("tid", ["duct.wrf_mesoscale", "duct.palm_microscale", "duct.scout_microscale"])

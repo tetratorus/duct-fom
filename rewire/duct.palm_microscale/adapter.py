@@ -14,6 +14,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from duct_common import bbox_wgs84, building_props, read_climate_hdf5, write_geojson
 
+# HDF5 row 0 = south: ucm-palm-sim copies PALM's (y, x) netCDF arrays verbatim (check_and_extract -> add_hdf5_output);
+# PALM y runs south->north (ucm-palm-prep flips the same static-driver arrays with flip_up=True for its GeoTIFFs),
+# and DUCT Explorer flips the HDF5 for display (dots/duct_nsc_variables.py).
+ROW0 = "south"
+
 
 def prepare(inputs: dict, params: dict, wd: Path) -> None:
     wd = Path(wd)
@@ -29,7 +34,7 @@ def prepare(inputs: dict, params: dict, wd: Path) -> None:
 
 
 def collect(wd: Path) -> dict:
-    return read_climate_hdf5(Path(wd) / "climatic-variables", "palm")
+    return read_climate_hdf5(Path(wd) / "climatic-variables", "palm", ROW0)
 
 
 def run(inputs: dict, params: dict) -> dict:

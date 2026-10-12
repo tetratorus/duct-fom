@@ -29,7 +29,7 @@ outputs:
   - name: scout_grid
     key: [cell_id]
     columns:
-      - {name: cell_id, type: string, description: "r<row>c<col> of the model output grid (north-up)"}
+      - {name: cell_id, type: string, description: "r<row>c<col> = upstream HDF5 array indices; row 0 is the SOUTHERN edge (DUCT writes its HDF5 south-up)"}
       - {name: row, type: int}
       - {name: col, type: int}
       - {name: geometry, type: geometry, description: "cell polygon, EPSG:3414"}
@@ -41,14 +41,17 @@ outputs:
       - {name: unit, type: string, description: "upstream HDF5 unit attr, verbatim"}
       - {name: timestamp, type: int, description: "upstream HDF5 timestamps attr, verbatim"}
       - {name: level, type: int, description: "z index (0 for 2D fields)"}
+      - {name: height_m, type: float, nullable: true, unit: m, description: "upstream HDF5 heights attr for 3D fields; null for 2D fields"}
       - {name: value, type: float}
 readiness:
   level: 3
   evidence:
     - "spine validate passes."
     - "rewire/tests: prepare() writes building-footprints/parameters from Silver; collect() reads an HDF5 laid out as ucm-scout writes it (processor.py L735-758) and output passes spine check_gold."
+    - "Grid orientation: HDF5 row 0 = south (ucm-scout/proc/processor.py grids on np.linspace(lat_min, lat_max) and flips back (L582) before stacking into the HDF5); rewire/tests/test_grid_orientation.py writes a north/south-asymmetric field, burns it to a GeoTIFF with upstream's own convert_vtp_to_geotiff, extracted verbatim from ucm-scout/proc/processor.py (pyvista.read stubbed with a point cloud), and checks every Gold cell polygon samples its own value."
   gaps:
     - "Scout not run here (needs NSCC ASPIRE2 PBS + OpenFOAM; gmsh/pyvista not installed)."
     - "Only air_temperature is produced upstream; timestamps are solver iteration steps, not wall-clock times."
     - "ucmscout.Parameters fields beyond name/area are passed through unverified."
     - "spine has no gold-import command for external runs yet; collect() returns the frames only."
+    - "height_m is declared nullable: true, but spine check_gold (sg-urban-spine 5da419f) treats every declared column as required, so a 2D field would fail the WAP audit until the spine honours nullable."
