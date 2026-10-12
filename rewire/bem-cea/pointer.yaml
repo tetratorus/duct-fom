@@ -1,0 +1,5 @@
+points_to: cea.building_demand
+owner: tetratorus/CityEnergyAnalyst (rewire/)
+replaces: [bem-cea-gen, bem-cea-bee]
+not_covered: [bem-cea-dcn]
+id_bridge_source: duct_bem_cea

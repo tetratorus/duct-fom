@@ -1,0 +1,59 @@
+id: duct.wrf_mesoscale
+version: 0.1.0
+kind: transform
+title: DUCT mWRF-SG mesoscale urban climate (ucm-wrf-prep + ucm-wrf-sim, d04 near-surface climate)
+description: >
+  Translated from ucm-wrf/proc_prep/descriptor.json and ucm-wrf/proc_sim/descriptor.json. WRF itself needs a PBS
+  cluster (both DUCT processors declare configurations gce-ubuntu-20.04 and nscc and submit with qsub), compiled
+  WRF/WPS and ERA5/static geodata, so this transform is external. adapter.prepare() writes the lcz-map input from
+  Silver land_cover.lcz; adapter.collect() turns the d04-near-surface-climate HDF5 (2m_air_temperature,
+  2m_air_temperature_uhi, 2m_relative_humidity, wet_bulb_globe_temperature, 10m_wind_speed, 10m_wind_direction)
+  into the Gold tables below. 999 (outside urban mask) in 2m_air_temperature_uhi is dropped.
+upstream:
+  repo: tetratorus/duct-fom (fork of cooling-singapore/duct-fom), path ucm-wrf; model mWRF-SG (cooling-singapore/mwrf_sg)
+  license: "MIT (duct-fom wrapper); WRF/mWRF-SG model licence not in this repo"
+  commercial_use: review
+  notes: "WRF is NCAR public-domain-style software; the Singapore modifications (mWRF-SG) live outside duct-fom and their licence was not checked here."
+runtime:
+  type: external
+  notes: >
+    HPC/PBS. 1) adapter.prepare(inputs, params, wd) writes parameters + lcz-map; caller adds bem-parameters, vegfra-map,
+    lh-profile, sh-profile. 2) Run ucm-wrf-prep then ucm-wrf-sim through SaaS Middleware RTI (native adapter,
+    configuration nscc or gce-ubuntu-20.04; see tetratorus/saas-middleware rewire/). 3) adapter.collect(wd) ->
+    Gold frames, published with spine's Write-Audit-Publish. Python 3.10.
+inputs:
+  - {name: land_cover, source: "silver:land_cover", columns: [cell_id, geometry, lcz]}
+parameters:
+  type: object
+  properties:
+    bounding_box: {type: object, description: "EPSG:4326 west/south/east/north; default = land_cover bounds"}
+    lcz_width: {type: integer, default: 1000}
+    lcz_height: {type: integer, default: 1000}
+    wrf_prep_parameters: {type: object, description: "UCMWRF.PrepParameters, passed through verbatim"}
+outputs:
+  - name: wrf_d04_grid
+    key: [cell_id]
+    columns:
+      - {name: cell_id, type: string, description: "r<row>c<col> of the model output grid (north-up)"}
+      - {name: row, type: int}
+      - {name: col, type: int}
+      - {name: geometry, type: geometry, description: "cell polygon, EPSG:3414"}
+  - name: wrf_d04_values
+    key: [cell_id, variable, timestamp, level]
+    columns:
+      - {name: cell_id, type: string}
+      - {name: variable, type: string, description: "upstream HDF5 dataset name, verbatim"}
+      - {name: unit, type: string, description: "upstream HDF5 unit attr, verbatim"}
+      - {name: timestamp, type: int, description: "upstream HDF5 timestamps attr, verbatim"}
+      - {name: level, type: int, description: "z index (0 for 2D fields)"}
+      - {name: value, type: float}
+readiness:
+  level: 4
+  evidence:
+    - "spine validate passes."
+    - "rewire/tests: prepare() writes an lcz-map GeoTIFF from Silver; collect() reads an HDF5 laid out as ucm-wrf-sim writes it (processor.py L832-837) and output passes spine check_gold."
+  gaps:
+    - "WRF not run here (no PBS cluster, WRF/WPS build or ERA5 boundary data on this machine)."
+    - "LCZ class encoding expected by ucm-wrf-prep lcz-map not verified against a real DUCT run."
+    - "Grid cells assume a north-up regular lat/lon grid from the HDF5 bounding_box; WRF d04 is Lambert-projected, so cell polygons are approximate."
+    - "spine has no gold-import command for external runs yet; collect() returns the frames only."
