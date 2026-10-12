@@ -1,0 +1,71 @@
+id: duct.mva_wind_corridor
+version: 0.1.0
+kind: transform
+title: DUCT MVA urban wind corridors (ucm-mva-uwc, least-cost-path over frontal area density)
+description: >
+  Wraps DUCT's ucm-mva-uwc processor (tetratorus/duct-fom ucm-mva/proc_uwc, translated from its descriptor.json)
+  without changing it. The adapter writes the processor's SaaS working-directory inputs (parameters,
+  building-footprints, land-mask) from Silver, calls proc_uwc.processor.function unmodified, and reads back its four
+  GeoTIFFs (wind-corridors-ns/-ew/-nwse/-nesw) as one Gold row per MVA cell. Upstream rasterises at a hardcoded
+  10 m unit; `resolution` (m) sets the coarse MVA cell size. Corridor values are upstream's per-direction
+  least-cost-path frequency normalised by its maximum (0-1, higher = stronger ventilation corridor).
+  A direction with no least-cost paths (upstream 0/0 = NaN everywhere) is reported as 0.
+  Buildings with null height_m are skipped (upstream needs a height). Only cells whose centroid lies in a district
+  (upstream's land mask) are published, with that districts hub as district_id; the margin cells upstream needs
+  around the mask are dropped after normalisation (values of kept cells are upstream's, unchanged).
+upstream:
+  repo: tetratorus/duct-fom (fork of cooling-singapore/duct-fom), path ucm-mva
+  license: MIT
+  commercial_use: allowed
+  notes: "MIT licence at repo root (Cooling Singapore / Singapore-ETH Centre). Python deps igraph (GPL-2.0+) is used as a library, not redistributed."
+runtime:
+  type: python
+  entrypoint: "adapter:run"
+  notes: "Python 3.10 (DUCT requirement). pip install -r ucm-mva/requirements.txt (includes saas-middleware 0.6.11 @8654f38; upstream imports saas.core.logging / saas.sdk.adapter)."
+inputs:
+  - {name: buildings, source: "silver:buildings", columns: [building_id, geometry, height_m]}
+  - {name: districts, source: "silver:districts", columns: [district_id, geometry]}
+parameters:
+  type: object
+  properties:
+    resolution: {type: integer, default: 300, minimum: 20, description: "MVA cell size in metres (upstream UnitSize = resolution / 10)"}
+    margin_m: {type: number, default: 100, minimum: 0, description: "padding around districts for the default bounding box; upstream needs non-land around the mask"}
+    bounding_box:
+      type: object
+      description: "EPSG:4326 west/south/east/north; default = districts bounds + margin_m"
+      properties:
+        west: {type: number}
+        south: {type: number}
+        east: {type: number}
+        north: {type: number}
+outputs:
+  - name: mva_wind_corridors
+    key: [cell_id]
+    columns:
+      - {name: cell_id, type: string, description: "mva:r<row>c<col> within the run's bounding box"}
+      - {name: row, type: int}
+      - {name: col, type: int}
+      - {name: corridor_ns, type: float, unit: "1", description: "north-south corridor strength, 0-1"}
+      - {name: corridor_ew, type: float, unit: "1", description: "east-west corridor strength, 0-1"}
+      - {name: corridor_nwse, type: float, unit: "1", description: "NW-SE corridor strength, 0-1"}
+      - {name: corridor_nesw, type: float, unit: "1", description: "NE-SW corridor strength, 0-1"}
+      - {name: district_id, type: string, description: "districts hub containing the cell centroid (cells outside every district are not published)"}
+      - {name: geometry, type: geometry, description: "MVA cell polygon, EPSG:3414"}
+golden:
+  - name: tanjong_pagar
+    path: golden/tanjong_pagar
+    tolerance: {rtol: 1.0e-6, atol: 1.0e-6}
+    reference: "frozen from the unmodified upstream ucm-mva/proc_uwc processor (duct-fom main) on 1,258 Overture 2026-09-23.1 buildings, Tanjong Pagar, 30 m cells; see golden/make_fixture.py"
+readiness:
+  level: 6
+  evidence:
+    - "Upstream processor used operationally behind DUCT Explorer (Cooling Singapore), per duct-fom README."
+    - "spine test passes: golden tanjong_pagar (1,258 real Overture buildings, Singapore, 30 m) frozen from the unmodified upstream processor."
+    - "rewire/tests: adapter output equals upstream run standalone via its own CLI (python processor.py <wd>) on the same inputs; upstream ucm-mva/tests graph test passes on Python 3.10 (cd ucm-mva && PYTHONPATH=.:dependencies/python TEST_DATA_PATH=/tmp pytest tests -k graph: 1 passed)."
+    - "spine run (sg-urban-spine 5da419f, unmodified) on a fresh lake with the golden inputs in Silver passes the WAP audit and publishes gold.duct.mva_wind_corridor.mva_wind_corridors (1,056 cells), served by spine serve (rewire/tests/test_mva_adapter.py::test_spine_run_publishes_and_serves)."
+  gaps:
+    - "Not validated against wind measurements or CFD (no Singapore wind-tunnel/met reference in repo)."
+    - "Upstream ucm-mva/tests image tests need TEST_DATA_PATH fixtures that are not in the repo; not run."
+    - "Fixture land mask is the bbox inset 50 m, not an official URA planning-area boundary."
+    - "Cell IDs are local to the run's bounding box; no persistent grid hub in Silver yet."
+    - "Margin cells outside the land mask (276 of 1,332 in tanjong_pagar) are not published; upstream normalises each direction by its maximum over the whole bounding box, so the published maximum can be below 1."

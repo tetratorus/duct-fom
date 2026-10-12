@@ -1,0 +1,57 @@
+id: duct.scout_microscale
+version: 0.1.0
+kind: transform
+title: DUCT Scout OpenFOAM microscale air temperature (ucm-scout)
+description: >
+  Translated from ucm-scout/proc/descriptor.json. Scout meshes buildings with gmsh and submits an OpenFOAM case to
+  NSCC ASPIRE2 via qsub, so this transform is external. adapter.prepare() writes building-footprints + parameters
+  from Silver; adapter.collect() turns climatic-variables HDF5 (air_temperature; t, y, x) into the Gold tables below.
+upstream:
+  repo: tetratorus/duct-fom (fork of cooling-singapore/duct-fom), path ucm-scout; solver OpenFOAM
+  license: "MIT (duct-fom wrapper); GPL-3.0 (OpenFOAM, installed on the HPC side, not in repo)"
+  commercial_use: review
+runtime:
+  type: external
+  notes: >
+    HPC (NSCC ASPIRE2, OpenFOAM module, PBS). 1) adapter.prepare(inputs, params, wd). 2) Run ucm-scout through SaaS
+    Middleware RTI (see tetratorus/saas-middleware rewire/). 3) adapter.collect(wd) -> Gold frames, published with
+    spine's Write-Audit-Publish. Python 3.10.
+inputs:
+  - {name: buildings, source: "silver:buildings", columns: [building_id, geometry, height_m]}
+  - {name: districts, source: "silver:districts", columns: [district_id, geometry]}
+parameters:
+  type: object
+  properties:
+    name: {type: string, default: spine}
+    bounding_box: {type: object, description: "EPSG:4326 west/south/east/north; default = districts bounds"}
+    scout_parameters: {type: object, description: "rest of ucmscout.Parameters, passed through verbatim"}
+outputs:
+  - name: scout_grid
+    key: [cell_id]
+    columns:
+      - {name: cell_id, type: string, description: "r<row>c<col> = upstream HDF5 array indices; row 0 is the SOUTHERN edge (DUCT writes its HDF5 south-up)"}
+      - {name: row, type: int}
+      - {name: col, type: int}
+      - {name: geometry, type: geometry, description: "cell polygon, EPSG:3414"}
+  - name: scout_values
+    key: [cell_id, variable, timestamp, level]
+    columns:
+      - {name: cell_id, type: string}
+      - {name: variable, type: string, description: "upstream HDF5 dataset name, verbatim"}
+      - {name: unit, type: string, description: "upstream HDF5 unit attr, verbatim"}
+      - {name: timestamp, type: int, description: "upstream HDF5 timestamps attr, verbatim"}
+      - {name: level, type: int, description: "z index; always 0 (Scout writes one 2D plane)"}
+      - {name: height_m, type: float, unit: m, description: "1.0 for air_temperature: the OpenFOAM cutting plane contour_xy_1 (case_template/system/predefinedSampleDict point (0 0 1)); never null"}
+      - {name: value, type: float}
+readiness:
+  level: 3
+  evidence:
+    - "spine validate passes."
+    - "rewire/tests: prepare() writes building-footprints/parameters from Silver; collect() reads an HDF5 laid out as ucm-scout writes it (processor.py L735-758) and output passes the unmodified spine check_gold (sg-urban-spine 5da419f; no nulls in any declared column)."
+    - "Grid orientation: HDF5 row 0 = south (ucm-scout/proc/processor.py grids on np.linspace(lat_min, lat_max) and flips back (L582) before stacking into the HDF5); rewire/tests/test_grid_orientation.py writes a north/south-asymmetric field, burns it to a GeoTIFF with upstream's own convert_vtp_to_geotiff, extracted verbatim from ucm-scout/proc/processor.py (pyvista.read stubbed with a point cloud), and checks every Gold cell polygon samples its own value."
+  gaps:
+    - "Scout not run here (needs NSCC ASPIRE2 PBS + OpenFOAM; gmsh/pyvista not installed)."
+    - "Only air_temperature is produced upstream; timestamps are solver iteration steps, not wall-clock times."
+    - "ucmscout.Parameters fields beyond name/area are passed through unverified."
+    - "spine has no gold-import command for external runs yet; collect() returns the frames only."
+    - "height_m = 1 m is the sampling plane in the case template; not checked against a real Scout output."
