@@ -32,7 +32,7 @@ def _upstream_function(path, name, **globs):
     mod = ast.Module(body=[node], type_ignores=[])
     ns = {"np": np, "rasterio": rasterio, "CRS": CRS, "Union": Union, "BoundingBox": object, "BlockMeshDict": object,
           **globs}
-    exec(compile(mod, str(REPO / path), "exec"), ns)
+    exec(compile(mod, str(REPO / path), "exec"), ns)  # noqa: S102 -- verbatim upstream function, read-only
     return ns[name]
 
 

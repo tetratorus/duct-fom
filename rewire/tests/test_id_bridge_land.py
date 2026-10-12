@@ -10,7 +10,7 @@ from spine.lake import Lake
 
 REWIRE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REWIRE))
-from id_bridge import COLUMNS, land  # noqa: E402
+from id_bridge import COLUMNS, land
 
 
 def _lake(tmp_path):
@@ -53,7 +53,7 @@ def test_land_legacy_spatial(tmp_path):
 def test_land_cli(tmp_path):
     lake = _lake(tmp_path)
     r = subprocess.run([sys.executable, str(REWIRE / "id_bridge.py"), "--lake", str(lake.root), "--source-version", "v1"],
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, check=False)
     assert r.returncode == 0, r.stderr
     got = lake.silver_read("id_bridge")
     assert _ids(got, "duct_bem_cea") == ["B1", "B2"] and _ids(got, "ura_mp2019") == ["P9"]
