@@ -2,7 +2,7 @@
 
 Silver buildings/districts (EPSG:3414) -> the SaaS working-directory files upstream expects
 (`parameters`, `building-footprints`, `land-mask` GeoJSON in EPSG:4326) -> upstream `proc_uwc.processor.function`
--> its four GeoTIFFs -> one Gold row per MVA grid cell, cell polygons reprojected to EPSG:3414.
+-> its four GeoTIFFs -> one Gold row per MVA grid cell inside the land mask, cell polygons reprojected to EPSG:3414.
 """
 from __future__ import annotations
 
@@ -83,6 +83,12 @@ def read_upstream_outputs(wd: Path, districts: gpd.GeoDataFrame) -> gpd.GeoDataF
     return cells[["cell_id", "row", "col", *DIRECTIONS.values(), "district_id", "geometry"]]
 
 
+def land_cells(cells: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    """Cells whose centroid lies in a district (= upstream's land mask). The rest is the margin upstream needs
+    around the mask to start its least-cost paths; it is not part of the study area and is not published."""
+    return cells[cells["district_id"].notna()].reset_index(drop=True)
+
+
 def run(inputs: dict, params: dict) -> dict:
     buildings, districts = inputs["buildings"], inputs["districts"]
     processor = _upstream_processor()
@@ -98,4 +104,4 @@ def run(inputs: dict, params: dict) -> dict:
     for col in DIRECTIONS.values():
         if cells[col].isna().all():
             cells[col] = 0.0
-    return {"mva_wind_corridors": cells}
+    return {"mva_wind_corridors": land_cells(cells)}

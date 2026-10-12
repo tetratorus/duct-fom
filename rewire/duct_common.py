@@ -56,22 +56,31 @@ def grid_cells(bounding_box: list, ny: int, nx: int, row0: str) -> gpd.GeoDataFr
                             geometry=geoms, crs="EPSG:4326").to_crs("EPSG:3414")
 
 
-def read_climate_hdf5(path: Path, prefix: str, row0: str, sentinels: dict | None = None) -> dict:
+def read_climate_hdf5(path: Path, prefix: str, row0: str, sentinels: dict | None = None,
+                      nominal_heights: dict | None = None, xy_table: str | None = None) -> dict:
     """DUCT.ClimateVariables / DUCT.NearSurfaceClimateVariables HDF5 -> {<prefix>_grid, <prefix>_values}.
 
     Each dataset is (t, y, x) or (t, z, y, x) with attrs unit, timestamps, bounding_box[, heights].
     row0: edge of the bounding box that y index 0 lies on ("south" for every DUCT writer, see grid_cells).
-    height_m is the dataset's heights attr, or null for 2D fields (upstream gives none).
+    height_m is never null: the dataset's heights attr for 3D fields, else nominal_heights[name] for 2D fields
+    (a height the upstream encodes elsewhere, e.g. WRF's `2m_` names). With xy_table set, 2D fields without a
+    nominal height go to <prefix>_<xy_table> (no level/height_m columns); otherwise they raise.
     Values equal to a dataset's sentinel (e.g. WRF's 999 outside the urban mask) and non-finite values are dropped.
     """
-    sentinels = sentinels or {}
-    grid, frames = None, []
+    sentinels, nominal_heights = sentinels or {}, nominal_heights or {}
+    grid, frames, xy_frames = None, [], []
     with h5py.File(path, "r") as f:
         for name in sorted(f.keys()):
             ds = f[name]
             data = np.asarray(ds[()], dtype="float64")
+            xy = False
             if data.ndim == 3:
-                data, heights = data[:, None], [np.nan]
+                if name in nominal_heights:
+                    data, heights = data[:, None], [float(nominal_heights[name])]
+                elif xy_table:
+                    data, heights, xy = data[:, None], [np.nan], True
+                else:
+                    raise ValueError(f"{name}: 2D field with no nominal height; add it to nominal_heights")
             elif data.ndim == 4:
                 heights = list(ds.attrs.get("heights", range(data.shape[1])))
             else:
@@ -97,5 +106,22 @@ def read_climate_hdf5(path: Path, prefix: str, row0: str, sentinels: dict | None
             keep = np.isfinite(vals)
             if name in sentinels:
                 keep &= vals != sentinels[name]
-            frames.append(df[keep])
-    return {f"{prefix}_grid": grid, f"{prefix}_values": pd.concat(frames, ignore_index=True)}
+            if xy:
+                xy_frames.append(df.loc[keep, ["cell_id", "variable", "unit", "timestamp", "value"]])
+            else:
+                frames.append(df[keep])
+    out = {f"{prefix}_grid": grid, f"{prefix}_values": _concat(frames, VALUES_DTYPES)}
+    if xy_table:
+        out[f"{prefix}_{xy_table}"] = _concat(xy_frames, XY_DTYPES)
+    return out
+
+
+VALUES_DTYPES = {"cell_id": "object", "variable": "object", "unit": "object", "timestamp": "int64",
+                 "level": "int64", "height_m": "float64", "value": "float64"}
+XY_DTYPES = {k: v for k, v in VALUES_DTYPES.items() if k not in ("level", "height_m")}
+
+
+def _concat(frames: list, dtypes: dict) -> pd.DataFrame:
+    if not frames:
+        return pd.DataFrame({k: pd.Series(dtype=v) for k, v in dtypes.items()})
+    return pd.concat(frames, ignore_index=True)

@@ -11,7 +11,7 @@ import pytest
 import rasterio
 from shapely.geometry import box
 from spine.transform import NotRunnable, invoke, load_descriptor
-from spine.validate import ExpectationError, check_columns, check_gold
+from spine.validate import check_gold
 
 REWIRE = Path(__file__).resolve().parents[1]
 CASE = REWIRE / "duct.mva_wind_corridor" / "golden" / "tanjong_pagar" / "inputs"
@@ -43,19 +43,24 @@ def _write_h5(path, datasets):
 
 
 def _check(desc, out):
-    """spine check_gold with `nullable: true` honoured (sg-urban-spine 5da419f marks every gold column required)."""
+    """The unmodified spine check_gold (every declared column required, i.e. no nulls), as `spine run` applies it."""
+    assert set(out) == {o["name"] for o in desc.data["outputs"]}
     for spec in desc.data["outputs"]:
-        cols = {c["name"]: {"type": c["type"], "required": not c.get("nullable", False)} for c in spec["columns"]}
-        check_columns(out[spec["name"]], cols, spec.get("key", []), f"gold.{spec['name']}")
+        check_gold(spec["name"], out[spec["name"]], spec)
 
 
-@pytest.mark.xfail(strict=True, raises=ExpectationError,
-                   reason="sg-urban-spine check_gold ignores `nullable`; height_m is null for 2D fields")
-def test_spine_check_gold_accepts_nullable_height(tmp_path):
-    mod, desc = _adapter("duct.scout_microscale")
-    _write_h5(tmp_path / "climatic-variables", {"air_temperature": (np.full((1, 2, 2), 31.0), "˚C", {})})
-    out = mod.collect(tmp_path)
-    check_gold("scout_values", out["scout_values"], desc.data["outputs"][1])
+def test_declared_columns_have_no_nullable_flag():
+    """spine/transform.schema.json has no `nullable`; check_gold requires every declared column."""
+    for tid in ("duct.mva_wind_corridor", "duct.wrf_mesoscale", "duct.palm_microscale", "duct.scout_microscale"):
+        _, desc = _adapter(tid)
+        assert not [c for o in desc.data["outputs"] for c in o["columns"] if "nullable" in c], tid
+
+
+def test_2d_field_without_nominal_height_is_rejected(tmp_path):
+    mod, _ = _adapter("duct.scout_microscale")
+    _write_h5(tmp_path / "climatic-variables", {"wind_speed": (np.full((1, 2, 2), 1.0), "m/s", {})})
+    with pytest.raises(ValueError, match="nominal height"):
+        mod.collect(tmp_path)
 
 
 @pytest.mark.parametrize("tid", ["duct.wrf_mesoscale", "duct.palm_microscale", "duct.scout_microscale"])
@@ -83,6 +88,7 @@ def test_wrf_prepare_and_collect(tmp_path):
     _check(desc, out)
     v = out["wrf_d04_values"]
     assert len(out["wrf_d04_grid"]) == 20
+    assert set(v.height_m) == {2.0} and set(v.level) == {0}
     assert len(v[v.variable == "2m_air_temperature"]) == 40 and len(v[v.variable == "2m_air_temperature_uhi"]) == 38
     assert out["wrf_d04_grid"].crs.to_epsg() == 3414
 
@@ -94,11 +100,16 @@ def test_palm_prepare_and_collect(tmp_path):
     assert len(feats) == 1258 and all(int(f["properties"]["height"]) >= 1 for f in feats)
     assert json.loads((tmp_path / "parameters").read_text())["bbox"]["west"] > 103.8
     _write_h5(tmp_path / "climatic-variables",
-              {"air_temperature": (np.random.default_rng(0).normal(30, 1, (2, 3, 4, 5)), "C", {"heights": [0, 2, 4]})})
+              {"air_temperature": (np.random.default_rng(0).normal(30, 1, (2, 3, 4, 5)), "C", {"heights": [0, 2, 4]}),
+               "surface_temperature": (np.full((2, 4, 5), 35.0), "˚C", {}),
+               "pet": (np.full((2, 4, 5), 33.0), "˚C", {})})
     out = mod.collect(tmp_path)
     _check(desc, out)
     assert len(out["palm_values"]) == 2 * 3 * 20
     assert sorted(out["palm_values"].height_m.unique()) == [0, 2, 4]
+    xy = out["palm_xy_values"]
+    assert len(xy) == 2 * 2 * 20 and set(xy.variable) == {"surface_temperature", "pet"}
+    assert "height_m" not in xy.columns
 
 
 def test_scout_prepare_and_collect(tmp_path):
@@ -111,7 +122,7 @@ def test_scout_prepare_and_collect(tmp_path):
     _write_h5(tmp_path / "climatic-variables", {"air_temperature": (np.full((3, 4, 5), 31.0), "˚C", {})})
     out = mod.collect(tmp_path)
     _check(desc, out)
-    assert (out["scout_values"].value == 31.0).all()
+    assert (out["scout_values"].value == 31.0).all() and set(out["scout_values"].height_m) == {1.0}
 
 
 def test_id_bridge():

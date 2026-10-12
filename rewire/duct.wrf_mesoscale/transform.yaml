@@ -45,18 +45,18 @@ outputs:
       - {name: variable, type: string, description: "upstream HDF5 dataset name, verbatim"}
       - {name: unit, type: string, description: "upstream HDF5 unit attr, verbatim"}
       - {name: timestamp, type: int, description: "upstream HDF5 timestamps attr, verbatim"}
-      - {name: level, type: int, description: "z index (0 for 2D fields)"}
-      - {name: height_m, type: float, nullable: true, unit: m, description: "upstream HDF5 heights attr for 3D fields; null for 2D fields"}
+      - {name: level, type: int, description: "z index; always 0 (every d04 field is 2D)"}
+      - {name: height_m, type: float, unit: m, description: "nominal height above ground: 2 for 2m_* and wet_bulb_globe_temperature (wbgt.py REF_HEIGHT 2.0), 10 for 10m_*; never null (adapter NOMINAL_HEIGHT_M)"}
       - {name: value, type: float}
 readiness:
   level: 4
   evidence:
     - "spine validate passes."
-    - "rewire/tests: prepare() writes an lcz-map GeoTIFF from Silver; collect() reads an HDF5 laid out as ucm-wrf-sim writes it (processor.py L832-837) and output passes spine check_gold."
+    - "rewire/tests: prepare() writes an lcz-map GeoTIFF from Silver; collect() reads an HDF5 laid out as ucm-wrf-sim writes it (processor.py L832-837) and output passes the unmodified spine check_gold (sg-urban-spine 5da419f; no nulls in any declared column)."
     - "Grid orientation: HDF5 row 0 = south (ucm-wrf/proc_sim/processor.py stores c_data south-up and flips only for the GeoTIFF (L850)); rewire/tests/test_grid_orientation.py writes a north/south-asymmetric field, burns it to a GeoTIFF with upstream's own export_as_tiff, extracted verbatim from ucm-wrf/proc_sim/processor.py, and checks every Gold cell polygon samples its own value."
   gaps:
     - "WRF not run here (no PBS cluster, WRF/WPS build or ERA5 boundary data on this machine)."
     - "LCZ class encoding expected by ucm-wrf-prep lcz-map not verified against a real DUCT run."
     - "Grid cells are a regular lat/lon grid over the HDF5 bounding_box (min/max XLAT/XLONG), row 0 = south; WRF d04 is Lambert-projected, so cell polygons are approximate (same approximation as upstream's own GeoTIFF)."
     - "spine has no gold-import command for external runs yet; collect() returns the frames only."
-    - "height_m is declared nullable: true, but spine check_gold (sg-urban-spine 5da419f) treats every declared column as required, so a 2D field would fail the WAP audit until the spine honours nullable."
+    - "height_m for the 2D d04 fields is a nominal height taken from the upstream variable names / wbgt.py, not from an HDF5 attr; an unknown 2D dataset makes collect() raise rather than publish a null height."

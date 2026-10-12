@@ -22,6 +22,12 @@ from duct_common import bbox_wgs84, read_climate_hdf5
 # GeoTIFF (export_as_tiff(..., flip_vertically=True)); DUCT Explorer flips the HDF5 back (dots/duct_nsc_variables.py).
 ROW0 = "south"
 UHI_OUTSIDE_URBAN = 999  # ucm-wrf/proc_sim/processor.py writes 999 outside the urban mask for 2m_air_temperature_uhi
+# Every d04 field is 2D (t, y, x); the height is in upstream's variable name (processor.py L880-915, WRF T2/RH2/U10/V10).
+# WBGT is computed for a 2 m reference height (ucm-wrf/proc_sim/wbgt.py REF_HEIGHT = 2.0, 10 m wind scaled down to it).
+NOMINAL_HEIGHT_M = {
+    "2m_air_temperature": 2.0, "2m_air_temperature_uhi": 2.0, "2m_relative_humidity": 2.0,
+    "wet_bulb_globe_temperature": 2.0, "10m_wind_speed": 10.0, "10m_wind_direction": 10.0,
+}
 
 
 def write_lcz_map(path: Path, land_cover: gpd.GeoDataFrame, bbox: dict, width: int, height: int) -> None:
@@ -45,7 +51,7 @@ def prepare(inputs: dict, params: dict, wd: Path) -> None:
 
 def collect(wd: Path) -> dict:
     return read_climate_hdf5(Path(wd) / "d04-near-surface-climate", "wrf_d04", ROW0,
-                             sentinels={"2m_air_temperature_uhi": UHI_OUTSIDE_URBAN})
+                             sentinels={"2m_air_temperature_uhi": UHI_OUTSIDE_URBAN}, nominal_heights=NOMINAL_HEIGHT_M)
 
 
 def run(inputs: dict, params: dict) -> dict:

@@ -5,8 +5,9 @@ title: DUCT PALM-4U microscale urban climate (ucm-palm-prep + ucm-palm-sim)
 description: >
   Translated from ucm-palm/proc_prep/descriptor.json and ucm-palm/proc_sim/descriptor.json. PALM-4U runs on NSCC
   (ucm-palm-sim declares only configuration nscc), so this transform is external. adapter.prepare() writes the
-  buildings GeoJSON from Silver; adapter.collect() turns climatic-variables HDF5 (air_temperature,
-  relative_humidity, wind_speed; t, z, y, x) into the Gold tables below.
+  buildings GeoJSON from Silver; adapter.collect() turns climatic-variables HDF5 into the Gold tables below: 3D
+  fields (air_temperature, relative_humidity, wind_speed, wind_direction; t, z, y, x, with a heights attr) into
+  palm_values, 2D fields (surface_temperature, pet; t, y, x, no height) into palm_xy_values.
 upstream:
   repo: tetratorus/duct-fom (fork of cooling-singapore/duct-fom), path ucm-palm; model PALM-4U
   license: "MIT (duct-fom wrapper); GPL-3.0-or-later (PALM, ucm-palm/palm_csd/LICENSE)"
@@ -45,18 +46,26 @@ outputs:
       - {name: variable, type: string, description: "upstream HDF5 dataset name, verbatim"}
       - {name: unit, type: string, description: "upstream HDF5 unit attr, verbatim"}
       - {name: timestamp, type: int, description: "upstream HDF5 timestamps attr, verbatim"}
-      - {name: level, type: int, description: "z index (0 for 2D fields)"}
-      - {name: height_m, type: float, nullable: true, unit: m, description: "upstream HDF5 heights attr for 3D fields; null for 2D fields"}
+      - {name: level, type: int, description: "z index into the upstream heights attr"}
+      - {name: height_m, type: float, unit: m, description: "upstream HDF5 heights attr (z index * dz); never null"}
+      - {name: value, type: float}
+  - name: palm_xy_values
+    key: [cell_id, variable, timestamp]
+    columns:
+      - {name: cell_id, type: string}
+      - {name: variable, type: string, description: "upstream 2D HDF5 dataset name, verbatim (surface_temperature, pet: PALM *_xy output)"}
+      - {name: unit, type: string, description: "upstream HDF5 unit attr, verbatim"}
+      - {name: timestamp, type: int, description: "upstream HDF5 timestamps attr, verbatim"}
       - {name: value, type: float}
 readiness:
   level: 4
   evidence:
     - "spine validate passes."
-    - "rewire/tests: prepare() writes buildings GeoJSON from Silver; collect() reads a 4D HDF5 laid out as ucm-palm-sim add_hdf5_output writes it (processor.py L320-350) and output passes spine check_gold."
+    - "rewire/tests: prepare() writes buildings GeoJSON from Silver; collect() reads a 4D HDF5 laid out as ucm-palm-sim add_hdf5_output writes it (processor.py L320-350) and output (3D -> palm_values, 2D -> palm_xy_values) passes the unmodified spine check_gold (sg-urban-spine 5da419f; no nulls in any declared column)."
     - "Grid orientation: HDF5 row 0 = south (ucm-palm-sim copies PALM (y, x) netCDF arrays verbatim; PALM y runs south->north (ucm-palm-prep flip_up=True for its GeoTIFFs)); rewire/tests/test_grid_orientation.py writes a north/south-asymmetric field, burns it to a GeoTIFF with upstream's own export_as_tiff_4326(flip_up=True), extracted verbatim from ucm-palm/proc_prep/processor.py, and checks every Gold cell polygon samples its own value."
   gaps:
     - "PALM not run here (needs NSCC PBS, compiled PALM-4U; netCDF4/GDAL stack not installed)."
     - "Silver has no PALM landcover_type/vegetation_type, so those inputs are passed through, not derived."
     - "HDF5 timestamps semantics (seconds since start) taken from code, not from a real output file."
     - "spine has no gold-import command for external runs yet; collect() returns the frames only."
-    - "height_m is declared nullable: true, but spine check_gold (sg-urban-spine 5da419f) treats every declared column as required, so a 2D field would fail the WAP audit until the spine honours nullable."
+    - "2D fields (surface_temperature, pet) go to palm_xy_values without a height: neither the HDF5 nor duct-fom states one (pet's evaluation height is internal to PALM's biometeorology module, whose source is not in this repo)."

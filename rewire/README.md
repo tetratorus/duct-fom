@@ -27,6 +27,18 @@ pip install 'git+https://github.com/tetratorus/saas-middleware@sg-urban-spine' \
 spine --path rewire validate
 spine --path rewire test            # golden: duct.mva_wind_corridor [tanjong_pagar]
 pytest rewire/tests
+# upstream's own tests, from inside ucm-mva (its tests import proc_uvp/proc_uwc and dependencies/python modules):
+(cd ucm-mva && PYTHONPATH=.:dependencies/python TEST_DATA_PATH=/tmp pytest tests -k graph)   # 1 passed
+```
+
+End to end through Write-Audit-Publish and the OGC API Features view (fresh lake, golden inputs as Silver):
+
+```bash
+python -c "import geopandas as gpd; from spine.lake import Lake; L = Lake('lake'); G = 'rewire/duct.mva_wind_corridor/golden/tanjong_pagar/inputs/'
+for t in ('buildings', 'districts'): L.silver_write(t, gpd.read_parquet(G + t + '.parquet'))"
+spine --lake lake --path rewire run duct.mva_wind_corridor \
+  --params "$(cat rewire/duct.mva_wind_corridor/golden/tanjong_pagar/params.json)"   # audit passes, 1,056 cells published
+spine --lake lake serve   # /collections/gold.duct.mva_wind_corridor.mva_wind_corridors/items
 ```
 
 Pins: upstream `saas` 0.6.x pins `numpy==1.23.5`; newer geopandas/pandas need numpy>=1.24, hence the pins.
@@ -35,8 +47,11 @@ Pins: upstream `saas` 0.6.x pins `numpy==1.23.5`; newer geopandas/pandas need nu
 
 `adapter.py` writes `parameters`, `building-footprints` (GeoJSON, `height` = Silver `height_m`) and `land-mask`
 (Silver `districts`) into a temp SaaS working directory, calls `proc_uwc.processor.function(wd)` unmodified, and
-reads its four GeoTIFFs back into Gold `mva_wind_corridors` (one row per MVA cell, polygon in EPSG:3414,
-`district_id` from the cell centroid).
+reads its four GeoTIFFs back into Gold `mva_wind_corridors`: one row per MVA cell whose centroid lies in a
+district (upstream's land mask), polygon in EPSG:3414, `district_id` = that district. Upstream needs non-land
+margin around the mask to start its least-cost paths; those margin cells (276 of 1,332 in `tanjong_pagar`) are
+not part of the study area and are dropped after upstream's normalisation, so every published value is upstream's
+own and no Gold column is null (sg-urban-spine `check_gold` requires every declared column).
 
 Golden `tanjong_pagar`: 1,258 real Overture Maps buildings (release 2026-09-23.1, ODbL) in
 103.840–103.850 E, 1.274–1.284 N, 30 m cells; `golden/make_fixture.py` documents the DuckDB query and the two
@@ -56,7 +71,15 @@ document the contract:
    tetratorus/saas-middleware `rewire/README.md`.
 3. `adapter.collect(wd)` — the processor's HDF5 (`d04-near-surface-climate` / `climatic-variables`) ->
    Gold `<model>_grid` + `<model>_values` (long format: cell, variable, unit, timestamp, level, height_m, value;
-   `height_m` is null for 2D fields).
+   `height_m` never null). Every Gold column passes the unmodified spine `check_gold` (no `nullable`):
+   - WRF d04 fields are all 2D; `height_m` is the nominal height upstream encodes in the variable name
+     (`2m_*` = 2, `10m_*` = 10) and WBGT's 2 m reference height (`ucm-wrf/proc_sim/wbgt.py` `REF_HEIGHT = 2.0`).
+   - Scout `air_temperature` is 2D on the OpenFOAM cutting plane `contour_xy_1`, z = 1 m
+     (`ucm-scout/case_template/system/predefinedSampleDict`), so `height_m` = 1.
+   - PALM 3D fields carry a `heights` attr -> `palm_values`; its 2D `*_xy` fields (`surface_temperature`, `pet`)
+     have no height in the HDF5 or in duct-fom, so they go to a separate `palm_xy_values` table without
+     `level`/`height_m` rather than getting an invented height.
+   - A 2D dataset with no known height makes WRF/Scout `collect()` raise instead of publishing a null.
 
 `tests/test_external_adapters.py` exercises prepare/collect on HDF5 files written in the same layout as the upstream
 writers and checks them with spine's `check_gold`; the models themselves were not run. Gaps are listed per
@@ -97,10 +120,10 @@ None.
 ## Not runnable / not done
 
 - WRF, PALM, Scout: no HPC here (see above); no gold-import command in the spine yet for external results.
-- Nullable Gold columns: `district_id` (MVA, null outside the land mask) and `height_m` (null for 2D fields) are
-  declared `nullable: true`, but sg-urban-spine `check_gold` currently treats every declared column as required, so
-  `spine run duct.mva_wind_corridor` fails its WAP audit until the spine honours `nullable` (one-line change to
-  `spine/validate.py::check_gold`). `spine test` compares against the frozen golden and is unaffected.
+- MVA margin cells outside the land mask are not published (see above); upstream normalises over the whole
+  bounding box, so a direction's published maximum can be below 1.
 - Upstream `ucm-mva/tests/test_mva.py::test_proc_uvp` / `test_proc_uwc` need `TEST_DATA_PATH` fixtures that are not
-  in the repo; only `test_proc_uwc_graph` runs (passes on Python 3.10 with `TEST_DATA_PATH` set to any dir).
+  in the repo; only `test_proc_uwc_graph` runs: `cd ucm-mva && PYTHONPATH=.:dependencies/python TEST_DATA_PATH=/tmp
+  pytest tests -k graph` (1 passed on Python 3.10; without that `PYTHONPATH`, collection fails with
+  `ModuleNotFoundError: No module named 'proc_uvp'`).
 - `ucm-mva/proc_uvp` (urban ventilation hotspots) and `bem-cea/proc_dcn` (district cooling) are not wired.

@@ -15,6 +15,9 @@ from duct_common import bbox_wgs84, building_props, read_climate_hdf5, write_geo
 
 # HDF5 row 0 = south: ucm-scout/proc/processor.py convert_vtp_to_geotiff grids on np.linspace(lat_min, lat_max),
 # flips for the GeoTIFF and flips back (L582) before the array is stacked into the HDF5.
+# air_temperature is 2D: sampled on the OpenFOAM cutting plane contour_xy_1 (processor.py L739), which
+# case_template/system/predefinedSampleDict defines at point (0 0 1), normal (0 0 1), i.e. z = 1 m.
+NOMINAL_HEIGHT_M = {"air_temperature": 1.0}
 ROW0 = "south"
 
 
@@ -28,7 +31,7 @@ def prepare(inputs: dict, params: dict, wd: Path) -> None:
 
 
 def collect(wd: Path) -> dict:
-    return read_climate_hdf5(Path(wd) / "climatic-variables", "scout", ROW0)
+    return read_climate_hdf5(Path(wd) / "climatic-variables", "scout", ROW0, nominal_heights=NOMINAL_HEIGHT_M)
 
 
 def run(inputs: dict, params: dict) -> dict:

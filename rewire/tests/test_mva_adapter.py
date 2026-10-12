@@ -9,6 +9,8 @@ import geopandas as gpd
 import numpy as np
 import rasterio
 from spine.golden import run_golden
+from spine.lake import Lake
+from spine.serve import collections, features
 from spine.transform import load_descriptor
 
 HERE = Path(__file__).resolve().parents[1] / "duct.mva_wind_corridor"
@@ -33,8 +35,8 @@ def test_adapter_equals_upstream_cli(tmp_path):
     got = adapter.run(inputs, params)["mva_wind_corridors"].sort_values(["row", "col"])
     for name, col in adapter.DIRECTIONS.items():
         with rasterio.open(tmp_path / name) as src:
-            ref = src.read(1).astype("float64").ravel()
-        np.testing.assert_allclose(got[col].to_numpy(), ref, rtol=0, atol=0)
+            ref = src.read(1).astype("float64")
+        np.testing.assert_allclose(got[col].to_numpy(), ref[got["row"], got["col"]], rtol=0, atol=0)
 
 
 def test_output_contract():
@@ -42,8 +44,27 @@ def test_output_contract():
     assert out.crs.to_epsg() == 3414
     assert out["cell_id"].is_unique
     for col in adapter.DIRECTIONS.values():
-        assert out[col].between(0, 1).all() and out[col].max() == 1.0
-    assert set(out["district_id"].dropna()) == {"fixture:tanjong_pagar"}
+        assert out[col].between(0, 1).all()
+    assert out["district_id"].notna().all() and set(out["district_id"]) == {"fixture:tanjong_pagar"}
+    land = gpd.read_parquet(CASE / "inputs" / "districts.parquet").geometry.iloc[0]
+    assert out.geometry.centroid.within(land).all()
+
+
+def test_spine_run_publishes_and_serves(tmp_path):
+    """Reviewer repro: fresh lake, golden inputs in Silver, `spine run` must pass the WAP audit and be servable."""
+    lake = Lake(tmp_path / "lake")
+    for t in ("buildings", "districts"):
+        lake.silver_write(t, gpd.read_parquet(CASE / "inputs" / f"{t}.parquet"))
+    env = {**os.environ, "SPINE_LAKE": str(lake.root)}
+    subprocess.run([sys.executable, "-m", "spine.cli", "--lake", str(lake.root), "--path", str(HERE.parent),
+                    "run", "duct.mva_wind_corridor", "--params", (CASE / "params.json").read_text()],
+                   check=True, env=env, stdout=subprocess.DEVNULL)
+    cid = "gold.duct.mva_wind_corridor.mva_wind_corridors"
+    assert cid in [c["id"] for c in collections(lake)]
+    fc = features(lake, cid)
+    expected = gpd.read_parquet(CASE / "expected" / "mva_wind_corridors.parquet")
+    assert len(fc["features"]) == len(expected)
+    assert all(f["properties"]["district_id"] == "fixture:tanjong_pagar" for f in fc["features"])
 
 
 def test_golden():
