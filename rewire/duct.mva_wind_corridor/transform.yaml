@@ -9,6 +9,7 @@ description: >
   GeoTIFFs (wind-corridors-ns/-ew/-nwse/-nesw) as one Gold row per MVA cell. Upstream rasterises at a hardcoded
   10 m unit; `resolution` (m) sets the coarse MVA cell size. Corridor values are upstream's per-direction
   least-cost-path frequency normalised by its maximum (0-1, higher = stronger ventilation corridor).
+  A direction with no least-cost paths (upstream 0/0 = NaN everywhere) is reported as 0.
   Buildings with null height_m are skipped (upstream needs a height). district_id is the districts hub containing
   each cell centroid (null outside the land mask).
 upstream:
@@ -27,9 +28,10 @@ parameters:
   type: object
   properties:
     resolution: {type: integer, default: 300, minimum: 20, description: "MVA cell size in metres (upstream UnitSize = resolution / 10)"}
+    margin_m: {type: number, default: 100, minimum: 0, description: "padding around districts for the default bounding box; upstream needs non-land around the mask"}
     bounding_box:
       type: object
-      description: "EPSG:4326 west/south/east/north; default = bounds of the districts input"
+      description: "EPSG:4326 west/south/east/north; default = districts bounds + margin_m"
       properties:
         west: {type: number}
         south: {type: number}

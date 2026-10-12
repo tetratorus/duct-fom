@@ -49,3 +49,8 @@ def test_output_contract():
 def test_golden():
     res = run_golden(load_descriptor(HERE / "transform.yaml"))
     assert all(r.passed for r in res), [m for r in res for m in r.messages]
+
+
+def test_default_bbox_extends_past_land_mask():
+    out = adapter.run(_inputs(), {"resolution": 30})["mva_wind_corridors"]
+    assert out[list(adapter.DIRECTIONS.values())].notna().all().all()
